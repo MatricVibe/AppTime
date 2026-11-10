@@ -1,0 +1,73 @@
+// === Файл: FirebaseRepository.kt ===
+package com.example.apptime
+
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+data class LeaderboardEntry(
+    val uid: String = "",
+    val name: String = "Аноним",
+    val minutes: Long = 0L,
+    val updatedAt: Long = 0L
+)
+
+class FirebaseRepository {
+
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val leaderboardCollection = firestore.collection("leaderboard")
+
+    val currentUid: String
+        get() = auth.currentUser?.uid.orEmpty()
+
+    suspend fun signInAnonymouslyIfNeeded(): String = withContext(Dispatchers.IO) {
+        val existingUser = auth.currentUser
+        if (existingUser != null) {
+            return@withContext existingUser.uid
+        }
+        val result = Tasks.await(auth.signInAnonymously())
+        result.user?.uid ?: throw IllegalStateException("Не удалось выполнить анонимный вход")
+    }
+
+    suspend fun submitScore(name: String, minutes: Long) = withContext(Dispatchers.IO) {
+        val uid = signInAnonymouslyIfNeeded()
+        val cleanName = name.trim().ifEmpty { "Игрок_${uid.take(4)}" }
+
+        val data = mapOf(
+            "uid" to uid,
+            "name" to cleanName,
+            "minutes" to minutes,
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        Tasks.await(leaderboardCollection.document(uid).set(data))
+    }
+
+    suspend fun getTop50Leaderboard(): List<LeaderboardEntry> = withContext(Dispatchers.IO) {
+        signInAnonymouslyIfNeeded()
+
+        val snapshot = Tasks.await(
+            leaderboardCollection
+                .orderBy("minutes", Query.Direction.DESCENDING)
+                .limit(50)
+                .get()
+        )
+
+        snapshot.documents.mapNotNull { doc ->
+            val uid = doc.getString("uid") ?: doc.id
+            val name = doc.getString("name") ?: "Аноним"
+            val minutes = doc.getLong("minutes") ?: 0L
+            val updatedAt = doc.getLong("updatedAt") ?: 0L
+            LeaderboardEntry(
+                uid = uid,
+                name = name,
+                minutes = minutes,
+                updatedAt = updatedAt
+            )
+        }
+    }
+}

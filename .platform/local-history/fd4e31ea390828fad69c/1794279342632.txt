@@ -1,0 +1,72 @@
+package com.example.apptime
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+object GitHubUpdater {
+    private const val GITHUB_USER = "ТВОЙ_НИК_НА_GITHUB" // <-- ИЗМЕНИ ЭТО
+    private const val GITHUB_REPO = "AppTime"
+    private const val API_URL = "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases/latest"
+
+    suspend fun checkForUpdates(context: Context): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
+            val connection = URL(API_URL).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            if (connection.responseCode != 200) return@withContext false
+            val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val latestVersion = json.getString("tag_name").removePrefix("v")
+            var apkUrl: String? = null
+            val assets = json.getJSONArray("assets")
+            for (i in 0 until assets.length()) {
+                if (assets.getJSONObject(i).getString("name").endsWith(".apk")) {
+                    apkUrl = assets.getJSONObject(i).getString("browser_download_url")
+                    break
+                }
+            }
+            if (apkUrl != null && isVersionNewer(currentVersion, latestVersion)) {
+                downloadAndInstall(context, apkUrl)
+                return@withContext true
+            }
+            return@withContext false
+        } catch (e: Exception) { return@withContext false }
+    }
+
+    private fun isVersionNewer(current: String, latest: String): Boolean {
+        val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+        val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(currentParts.size, latestParts.size)) {
+            val c = currentParts.getOrElse(i) { 0 }
+            val l = latestParts.getOrElse(i) { 0 }
+            if (l > c) return true
+            if (l < c) return false
+        }
+        return false
+    }
+
+    private suspend fun downloadAndInstall(context: Context, apkUrl: String) = withContext(Dispatchers.IO) {
+        try {
+            val apkFile = File(context.getExternalFilesDir(null), "update.apk")
+            URL(apkUrl).openStream().use { input -> FileOutputStream(apkFile).use { output -> input.copyTo(output) } }
+            withContext(Dispatchers.Main) {
+                val apkUri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(apkUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+    }
+}

@@ -1,0 +1,4 @@
+package com.example.apptime
+
+class AppUsageModel {
+}

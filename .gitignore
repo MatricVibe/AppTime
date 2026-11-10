@@ -1,0 +1,7 @@
+google-services.json
+build/
+.idea/
+.gradle/
+local.properties
+*.apk
+*.aab
